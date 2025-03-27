@@ -20,6 +20,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import mean_squared_error, mean_absolute_error, hinge_loss, log_loss, accuracy_score
 from sklearn.metrics import accuracy_score, mean_squared_error, confusion_matrix , mean_absolute_error
 import tensorflow as tf
 from tensorflow.keras import layers, models, optimizers
@@ -63,6 +65,8 @@ class MLCourseGUI(QMainWindow):
                 data = datasets.load_iris()
             elif dataset_name == "Breast Cancer Dataset":
                 data = datasets.load_breast_cancer()
+            elif dataset_name == "Diabetes Dataset":
+                data = datasets.load_diabetes()
             elif dataset_name == "Digits Dataset":
                 data = datasets.load_digits()
             elif dataset_name == "Boston Housing Dataset":
@@ -166,36 +170,27 @@ class MLCourseGUI(QMainWindow):
                 self.show_error(f"Error applying scaling: {str(e)}")
                 
     def apply_missing_value_handling(self):
-    """Apply selected missing value handling method"""
-    method = self.missing_combo.currentText()
+        """Apply selected missing value handling method"""
+        method = self.missing_combo.currentText()
 
-    try:
-        df_train = pd.DataFrame(self.X_train)
-        df_test = pd.DataFrame(self.X_test)
+        try:
+            strategy = None
+            if method == "Mean Imputation":
+                strategy = "mean"
+            elif method == "Interpolation":
+                strategy = "linear"  # Bu özel bir durum (kullanılmayacak)
+            elif method == "Forward Fill":
+                strategy = "most_frequent"
+            elif method == "Backward Fill":
+                strategy = "most_frequent"
 
-        if method == "Mean Imputation":
-            df_train.fillna(df_train.mean(), inplace=True)
-            df_test.fillna(df_train.mean(), inplace=True)
+            if strategy:
+                imp = SimpleImputer(strategy=strategy)
+                self.X_train = imp.fit_transform(self.X_train)
+                self.X_test = imp.transform(self.X_test)
 
-        elif method == "Interpolation":
-            df_train.interpolate(method='linear', inplace=True)
-            df_test.interpolate(method='linear', inplace=True)
-
-        elif method == "Forward Fill":
-            df_train.fillna(method='ffill', inplace=True)
-            df_test.fillna(method='ffill', inplace=True)
-
-        elif method == "Backward Fill":
-            df_train.fillna(method='bfill', inplace=True)
-            df_test.fillna(method='bfill', inplace=True)
-
-        self.X_train = df_train.values
-        self.X_test = df_test.values
-
-    except Exception as e:
-        self.show_error(f"Error handling missing values: {str(e)}")
-
-                
+        except Exception as e:
+            self.show_error(f"Error handling missing values: {str(e)}")
     def create_data_section(self):
         """Create the data loading and preprocessing section"""
         data_group = QGroupBox("Data Management")
@@ -207,6 +202,7 @@ class MLCourseGUI(QMainWindow):
             "Load Custom Dataset",
             "Iris Dataset",
             "Breast Cancer Dataset",
+            "Diabetes Dataset",    
             "Digits Dataset",
             "Boston Housing Dataset",
             "MNIST Dataset"
@@ -322,7 +318,8 @@ class MLCourseGUI(QMainWindow):
             "Naive Bayes",
             {
                 "var_smoothing": "double",
-                "priors": ["uniform", "auto"]
+                "priors": ["uniform", "auto", "manual"],  # 👈 Yeni seçenek eklendi
+                "custom_priors": "text"                   # 👈 Yeni seçenek eklendi
             }
         )
         
@@ -473,6 +470,7 @@ class MLCourseGUI(QMainWindow):
         self.progress_bar = QProgressBar()
         self.status_bar.addPermanentWidget(self.progress_bar)
     
+    from functools import partial
     def create_algorithm_group(self, name, params):
         """Helper method to create algorithm parameter groups"""
         group = QGroupBox(name)
@@ -496,11 +494,13 @@ class MLCourseGUI(QMainWindow):
             elif isinstance(param_type, list):
                 widget = QComboBox()
                 widget.addItems(param_type)
-            
+            elif param_type == "text":
+                widget = QLineEdit()
+    
             param_layout.addWidget(widget)
             param_widgets[param_name] = widget
             layout.addLayout(param_layout)
-        
+            
         # Add train button
         train_btn = QPushButton(f"Train {name}")
         train_btn.clicked.connect(lambda: self.train_model(name, param_widgets))
@@ -508,6 +508,7 @@ class MLCourseGUI(QMainWindow):
         
         group.setLayout(layout)
         return group
+    
     def train_model(self, model_name, param_widgets):
         if model_name == "Linear Regression":
             # Kullanıcıdan parametreleri al
@@ -524,6 +525,7 @@ class MLCourseGUI(QMainWindow):
 
             # Loss fonksiyonuna göre hesaplama yap
             if loss_fn == "MSE":
+                from sklearn.metrics import mean_squared_error  # 👈
                 loss_value = mean_squared_error(self.y_test, y_pred)
             elif loss_fn == "MAE":
                 from sklearn.metrics import mean_absolute_error
@@ -588,9 +590,18 @@ class MLCourseGUI(QMainWindow):
                 y_pred = model.predict(self.X_test)
 
                 if loss_fn == "Hinge":
-                    margins = model.decision_function(self.X_test)
-                    true = 2 * (self.y_test == np.max(self.y_test)) - 1
-                    loss_value = np.mean(np.maximum(0, 1 - true * margins))
+                    from sklearn.metrics import hinge_loss
+                    y_true_bin = 2 * (self.y_test == np.max(self.y_test)) - 1
+
+                    # y_score oluşturulmalı!
+                    try:
+                        y_score = model.decision_function(self.X_test)  # ← bu satır önemli
+                    except:
+                        y_score = model.predict(self.X_test)
+
+                    margins = y_score[:, 1] if len(y_score.shape) > 1 and y_score.shape[1] > 1 else y_score.ravel()
+                    loss_value = hinge_loss(y_true_bin, margins)
+
                 else:
                     loss_value = 1 - accuracy_score(self.y_test, y_pred)
 
@@ -600,6 +611,7 @@ class MLCourseGUI(QMainWindow):
                 y_pred = model.predict(self.X_test)
 
                 if loss_fn == "MSE":
+                    from sklearn.metrics import mean_squared_error
                     loss_value = mean_squared_error(self.y_test, y_pred)
                 else:
                     loss_value = np.mean(np.abs(self.y_test - y_pred))
@@ -611,26 +623,52 @@ class MLCourseGUI(QMainWindow):
         elif model_name == "Naive Bayes":
             var_smoothing = param_widgets["var_smoothing"].value()
             prior_type = param_widgets["priors"].currentText()
+            prior_input = param_widgets["custom_priors"].text()  # 👈 manual input alınır
 
             # Priors ayarı
             if prior_type == "uniform":
-                # Sınıf sayısı kadar eşit olasılık
                 n_classes = len(np.unique(self.y_train))
                 priors = [1.0 / n_classes] * n_classes
+            elif prior_type == "manual":
+                try:
+                    priors = list(map(float, prior_input.strip("[] ").split(",")))
+                except:
+                    self.show_error("Invalid format for manual priors. Use format like: [0.3, 0.7]")
+                    return
             else:  # "auto"
-                priors = None  # GaussianNB kendi hesaplar
+                priors = None
 
             model = GaussianNB(var_smoothing=var_smoothing, priors=priors)
             model.fit(self.X_train, self.y_train)
             y_pred = model.predict(self.X_test)
 
-            from sklearn.metrics import accuracy_score
             accuracy = accuracy_score(self.y_test, y_pred)
 
             self.current_model = model
             self.update_visualization(y_pred)
             self.metrics_text.setText(f"Naive Bayes Accuracy: {accuracy:.4f}")
+
     
+        elif model_name == "K-Nearest Neighbors":
+            from sklearn.neighbors import KNeighborsClassifier
+            n_neighbors = param_widgets["n_neighbors"].value()
+            weights = param_widgets["weights"].currentText()
+            metric = param_widgets["metric"].currentText()
+
+            model = KNeighborsClassifier(
+                n_neighbors=n_neighbors,
+                weights=weights,
+                metric=metric
+            )
+            model.fit(self.X_train, self.y_train)
+            y_pred = model.predict(self.X_test)
+
+            accuracy = accuracy_score(self.y_test, y_pred)
+
+            self.current_model = model
+            self.update_visualization(y_pred)
+            self.metrics_text.setText(f"KNN Accuracy: {accuracy:.4f}")
+
 
     
     def show_error(self, message):
